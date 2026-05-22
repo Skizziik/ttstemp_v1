@@ -323,7 +323,7 @@
     capRu.textContent = data.ru || "—";
     capEn.textContent = data.en || "—";
     const t = data.timings || {};
-    camTiming.textContent = `blip ${t.blip_ms}ms · tr ${t.translate_ms}ms · silero ${t.silero_ms}ms · total ${networkMs}ms`;
+    camTiming.textContent = `vision ${t.vision_ms}ms · tr ${t.translate_ms}ms · silero ${t.silero_ms}ms · total ${networkMs}ms`;
 
     setCamStatus("speak", "speak");
     camAudio.src = data.url + "?t=" + Date.now();

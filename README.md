@@ -5,7 +5,7 @@ Local web UI for [tiny-tts](https://github.com/tronghieuit/tiny-tts) (1.62M-para
 ## Stack
 
 - **TinyTTS** (1.62M params, ~3.4 MB ONNX) — English TTS synthesis
-- **BLIP base** (~400 MB) — image captioning (English) for the camera mode
+- **Moondream2** (~1.9 GB, revision 2025-01-09) — vision-language model for the camera mode, runs on MPS (Apple Silicon GPU) in fp16
 - **Helsinki opus-mt-en-ru** (~300 MB) — EN→RU translation
 - **Silero v4_ru** (~60 MB) — Russian TTS (5 voices)
 - Flask backend, vanilla JS/CSS frontend
@@ -13,18 +13,18 @@ Local web UI for [tiny-tts](https://github.com/tronghieuit/tiny-tts) (1.62M-para
 ## Setup
 
 ```bash
+# macOS — libvips is required by Moondream2 (revision 2025-01-09)
+brew install vips
+
 python3.13 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# On macOS: libvips is needed if you ever swap BLIP for Moondream2's newer revision
-# brew install vips
 
 python app.py
 # open http://127.0.0.1:8000/
 ```
 
-First run downloads model checkpoints (~800 MB across BLIP + opus-mt + Silero, plus a few MB for TinyTTS).
+First run downloads model checkpoints (~2.3 GB total: Moondream ~1.9 GB + opus-mt ~300 MB + Silero ~60 MB + tinytts ~3 MB).
 NLTK resources are also needed once:
 
 ```python
@@ -42,15 +42,15 @@ for pkg in ["averaged_perceptron_tagger_eng", "cmudict", "punkt", "punkt_tab"]:
 - Two design themes: `studio` (monochrome, Linear/Vercel-style) and `classic` (purple-accent)
 
 ### Live narration panel
-Click **Start camera** → it captures a webcam frame, runs `BLIP → opus-mt → Silero baya`, plays the Russian description, waits 5 s, captures the next frame. Loops until **Stop**.
+Click **Start camera** → it captures a webcam frame, runs `Moondream2 (MPS) → opus-mt → Silero baya`, plays the Russian description, waits 5 s, captures the next frame. Loops until **Stop**.
 
 Voices: baya (female, default), kseniya, xenia, aidar (male), eugene (male).
 
-Warm-cycle timings on a 2024 MacBook Air CPU:
-- BLIP: ~600 ms
-- Translation: ~200 ms
-- Silero: ~600 ms
-- Total per cycle: ~1.4 s + audio length + 5 s wait
+Warm-cycle timings on M-series MacBook (MPS, fp16):
+- Moondream2 vision: ~5.6 s
+- Translation: ~500 ms
+- Silero: ~700 ms
+- Total per cycle: ~6.8 s + audio length + 5 s wait
 
 ## Endpoints
 
@@ -75,5 +75,7 @@ app.py                    # Flask server
 
 ## Known issues
 
-- BLIP captions are short and generic (`"an old car parked in front of a building"`). Moondream2 gives far richer descriptions but is slow on CPU; an MPS path on Apple Silicon is the next thing to try.
+- Moondream2 is loaded onto MPS via `transformers` + a `trust_remote_code` custom module that hasn't been updated for `transformers>=5`. The project pins `transformers<5` (4.55 line) in `requirements.txt` for that reason.
+- Moondream's vision encoder uses ops that don't have native MPS kernels in some torch builds; the app sets `PYTORCH_ENABLE_MPS_FALLBACK=1` at process start so unsupported ops fall back to CPU transparently.
+- opus-mt-en-ru sometimes leaves English nouns untranslated (e.g. `"Volkswagen Beetle"`) — that's expected and usually fine for speech.
 - Port 5000 conflicts with macOS AirPlay Receiver — that's why the server binds to 8000.

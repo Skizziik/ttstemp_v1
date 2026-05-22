@@ -13,5 +13,6 @@ omegaconf
 einops
 timm
 accelerate
+pyvips
 numba
 g2p-en

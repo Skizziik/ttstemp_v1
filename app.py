@@ -1,3 +1,7 @@
+import os
+# Must be set BEFORE importing torch so MPS uses CPU fallback for unsupported ops.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import base64
 import io
 import time
@@ -19,8 +23,8 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 _tts = None
 _tts_lock = threading.Lock()
 
-_blip = None
-_blip_lock = threading.Lock()
+_moondream = None
+_moondream_lock = threading.Lock()
 
 _translator = None
 _translator_lock = threading.Lock()
@@ -40,24 +44,42 @@ def get_tts():
     return _tts
 
 
-def get_blip():
-    global _blip
-    if _blip is None:
-        with _blip_lock:
-            if _blip is None:
-                from transformers import BlipProcessor, BlipForConditionalGeneration
+def get_moondream():
+    """Load Moondream2 onto MPS (Apple Silicon GPU) in fp16. Falls back to CPU.
 
-                print("[blip] loading Salesforce/blip-image-captioning-base...")
-                proc = BlipProcessor.from_pretrained(
-                    "Salesforce/blip-image-captioning-base"
+    Returns (model, tokenizer, device_str).
+    """
+    global _moondream
+    if _moondream is None:
+        with _moondream_lock:
+            if _moondream is None:
+                import torch
+                from transformers import AutoModelForCausalLM, AutoTokenizer
+
+                revision = "2025-01-09"
+                if torch.backends.mps.is_available():
+                    device = torch.device("mps")
+                    dtype = torch.float16
+                    dev_str = "mps/fp16"
+                else:
+                    device = torch.device("cpu")
+                    dtype = torch.float32
+                    dev_str = "cpu/fp32"
+
+                print(f"[moondream] loading {revision} on {dev_str}...")
+                mdl = AutoModelForCausalLM.from_pretrained(
+                    "vikhyatk/moondream2",
+                    revision=revision,
+                    trust_remote_code=True,
+                    torch_dtype=dtype,
                 )
-                mdl = BlipForConditionalGeneration.from_pretrained(
-                    "Salesforce/blip-image-captioning-base"
+                mdl = mdl.to(device).eval()
+                tok = AutoTokenizer.from_pretrained(
+                    "vikhyatk/moondream2", revision=revision
                 )
-                mdl.eval()
-                _blip = (proc, mdl)
-                print("[blip] ready.")
-    return _blip
+                _moondream = (mdl, tok, dev_str)
+                print(f"[moondream] ready ({dev_str}).")
+    return _moondream
 
 
 def get_translator():
@@ -176,14 +198,17 @@ def describe():
 
     timings = {}
 
-    # 1) BLIP captioning
+    # 1) Moondream2 captioning (MPS on Apple Silicon, CPU fallback)
     t0 = time.time()
-    blip_proc, blip_mdl = get_blip()
-    with _blip_lock:
-        inputs = blip_proc(image, return_tensors="pt")
-        out = blip_mdl.generate(**inputs, max_new_tokens=40, num_beams=3)
-        en_caption = blip_proc.decode(out[0], skip_special_tokens=True).strip()
-    timings["blip_ms"] = int((time.time() - t0) * 1000)
+    md_model, _md_tok, _dev = get_moondream()
+    with _moondream_lock:
+        result = md_model.query(
+            image,
+            "Describe what you see in one short sentence. "
+            "Mention key visible objects, people if any, colors, and the setting.",
+        )
+        en_caption = (result.get("answer") or "").strip()
+    timings["vision_ms"] = int((time.time() - t0) * 1000)
 
     # 2) EN -> RU translation
     t0 = time.time()
@@ -232,7 +257,7 @@ def audio(name):
 def health():
     return jsonify({
         "tinytts": _tts is not None,
-        "blip": _blip is not None,
+        "moondream": _moondream is not None,
         "translator": _translator is not None,
         "silero": _silero is not None,
     })
